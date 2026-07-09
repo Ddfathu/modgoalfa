@@ -24,6 +24,13 @@ if ! id "$USER_NAME" &>/dev/null; then
 fi
 echo "$USER_NAME:$USER_PASS" | chpasswd
 
+# 🔥 PERBAIKAN UTAMA: Wajib generate host keys agar Dropbear di Alpine mau hidup
+echo "[*] Generate Dropbear Host Keys (Alpine Mode)..."
+mkdir -p /etc/dropbear
+if [ ! -f /etc/dropbear/dropbear_rsa_host_key ]; then
+    dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key
+fi
+
 echo "[*] Memulai Dropbear Server di Port Lokal 22..."
 /usr/sbin/dropbear -p 127.0.0.1:22 -b /etc/dropbear_banner -W 65536
 
