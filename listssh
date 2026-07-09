@@ -1,7 +1,0 @@
-#!/bin/bash
-clear
-echo "=== DAFTAR USER SSH AKTIF ==="
-echo "-----------------------------------"
-# Menampilkan user biasa (UID 1000 ke atas) yang memakai shell bash
-awk -F: '$3 >= 1000 && $7 ~ /bash/ {print "-> " $1}' /etc/passwd
-echo "-----------------------------------"
