@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/base64"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -78,9 +77,9 @@ func main() {
 func handleClient(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	// Naikkan timeout baca ke 1.5 detik agar payload berlapis tidak terpotong fragmentasi
+	// Timeout baca longgar 1.5 detik biar payload trik berlapis gak kepotong
 	clientConn.SetReadDeadline(time.Now().Add(1500 * time.Millisecond))
-	headerBuf := make([]byte, 16384) // Naikkan buffer tampung header ke 16KB
+	headerBuf := make([]byte, 16384)
 	n, err := clientConn.Read(headerBuf)
 	clientConn.SetReadDeadline(time.Time{})
 
@@ -105,11 +104,10 @@ func handleClient(clientConn net.Conn) {
 		return
 	}
 
-	// JALUR 2: Jabat Tangan WebSocket (Sistem Ekstraksi Kebal Multi-Payload)
+	// JALUR 2: WEBSOCKET HANDSHAKE (Logika Contains Anti-502)
 	rawText := string(rawPayload)
 	wsKey := ""
 	
-	// Ganti total ke logika Contains mirip Python biar gak sensitif spasi/posisi huruf
 	lines := strings.Split(rawText, "\r\n")
 	for _, line := range lines {
 		if strings.Contains(strings.ToLower(line), "sec-websocket-key") {
@@ -121,16 +119,15 @@ func handleClient(clientConn net.Conn) {
 		}
 	}
 
-	// Jika bener-bener gak ketemu akibat diacak CDN, ambil fallback key aman
 	if wsKey == "" {
 		wsKey = base64.StdEncoding.EncodeToString([]byte(time.Now().String() + "turbo-salt"))
 	}
 
-	// Respon balik HTTP 101 murni dengan formasi standar \r\n rapi
 	h := sha1.New()
 	h.Write([]byte(wsKey + WS_MAGIC))
 	acceptKey := base64.StdEncoding.EncodeToString(h.Sum(nil))
 	
+	// String murni tanpa butuh library "fmt"
 	response := "HTTP/1.1 101 Switching Protocols\r\n" +
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +
@@ -146,7 +143,7 @@ func handleClient(clientConn net.Conn) {
 	defer sshConn.Close()
 	tuneSocket(sshConn)
 
-	// Pipa 1: HP -> SSH Server (Penyaring Payload Sampah Trik)
+	// Pipa 1: HP -> SSH Server (Enhanced Payload Matcher)
 	go func() {
 		firstPacket := true
 		buf := make([]byte, 65536)
@@ -168,7 +165,7 @@ func handleClient(clientConn net.Conn) {
 		}
 	}()
 
-	// Pipa 2: SSH Server -> HP (Injeksi Heartbeat Perangko \x89\x00)
+	// Pipa 2: SSH Server -> HP (Injeksi Heartbeat \x89\x00 Perangko)
 	bufDown := make([]byte, 65536)
 	for {
 		sshConn.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -181,7 +178,7 @@ func handleClient(clientConn net.Conn) {
 		if err != nil {
 			return
 		}
-		sshConn.SetReadDeadline(time.Time{})
+		clientConn.SetReadDeadline(time.Time{})
 		_, err = clientConn.Write(bufDown[:rn])
 		if err != nil {
 			return
