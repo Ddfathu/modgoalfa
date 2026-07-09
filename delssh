@@ -1,0 +1,13 @@
+#!/bin/bash
+clear
+echo "=== HAPUS USER SSH (ALPINE MODE) ==="
+read -p "Masukkan Username yang mau dihapus: " DEL_USER
+
+if ! id "$DEL_USER" &>/dev/null; then
+    echo "User '$DEL_USER' tidak ditemukan!"
+    exit 1
+fi
+
+# Pake perintah hapus user khas Alpine
+deluser --remove-home "$DEL_USER"
+echo "User '$DEL_USER' berhasil dihapus dari server!"
