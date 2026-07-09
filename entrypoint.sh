@@ -44,16 +44,15 @@ EOF
 echo "[*] Memulai Stunnel..."
 stunnel /etc/stunnel/stunnel.conf &
 
-# 🔥 JALANKAN BINER GO SEBAGAI PROXY BACKEND WEBSOCKET (Port 8880)
-echo "[*] Memulai GOLANG TURBO WS PROXY Engine di Port $WS_INTERNAL_PORT..."
-WS_PORT="$WS_INTERNAL_PORT" WS_TARGET_HOST="127.0.0.1" WS_TARGET_PORT="22" turbo-proxy &
+echo "[*] Memulai WebSocket Proxy (Python Engine) di Port $WS_INTERNAL_PORT..."
+WS_PORT="$WS_INTERNAL_PORT" WS_TARGET_HOST="127.0.0.1" WS_TARGET_PORT="22" \
+    python3 /usr/local/bin/ws-proxy.py &
 
 if [ -n "$CF_TUNNEL_TOKEN" ]; then
     echo "[*] Menjalankan Cloudflare Tunnel..."
     cloudflared tunnel run --token "$CF_TUNNEL_TOKEN" &
 fi
 
-# 🔥 KEMBALIKAN GERBANG LUAR KE MUX.PY ASLI LU YANG TERBUKTI SAKTI DAN KONEK
 echo "[*] Memulai Multiplexer Gerbang Utama di Port PUBLIK $PUBLIC_PORT..."
 exec env \
     PORT="$PUBLIC_PORT" \
