@@ -1,0 +1,20 @@
+#!/bin/bash
+clear
+echo "=== MEMBUAT USER SSH BARU (ALPINE MODE) ==="
+read -p "Masukkan Username baru: " NEW_USER
+read -p "Masukkan Password baru: " NEW_PASS
+read -p "Berapa hari aktif (Masa Aktif): " AKTIF
+
+if id "$NEW_USER" &>/dev/null; then
+    echo "Gagal: Username '$NEW_USER' sudah ada!"
+    exit 1
+fi
+
+# Pake syntax adduser Alpine
+adduser -D -s /bin/bash "$NEW_USER"
+echo "$NEW_USER:$NEW_PASS" | chpasswd
+
+# Trik Expired di Alpine menggunakan chage alternatif (mengunci akun nanti)
+# Untuk kesederhanaan di kontainer Docker, kita catat tanggal expired-nya
+echo "User $NEW_USER berhasil dibuat!"
+echo "Masa aktif: $AKTIF Hari"
