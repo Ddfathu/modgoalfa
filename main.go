@@ -20,7 +20,7 @@ const (
 )
 
 var (
-	listenPort     = getEnv("PORT", "443")
+	listenPort     = getEnv("PORT", "8080")
 	sslTargetHost  = getEnv("SSL_TARGET_HOST", "127.0.0.1")
 	sslTargetPort  = getEnv("SSL_TARGET_PORT", "2443")
 	sshTargetHost  = getEnv("WS_TARGET_HOST", "127.0.0.1")
@@ -78,16 +78,20 @@ func main() {
 func handleClient(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	clientConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	firstByte := make([]byte, 1)
-	n, err := clientConn.Read(firstByte)
+	// Naikkan timeout baca ke 1.5 detik agar payload berlapis tidak terpotong fragmentasi
+	clientConn.SetReadDeadline(time.Now().Add(1500 * time.Millisecond))
+	headerBuf := make([]byte, 16384) // Naikkan buffer tampung header ke 16KB
+	n, err := clientConn.Read(headerBuf)
 	clientConn.SetReadDeadline(time.Time{})
 
-	if err != nil && err != io.EOF {
+	if err != nil || n == 0 {
 		return
 	}
 
-	if n > 0 && firstByte[0] == TLS_HANDSHAKE_BYTE {
+	rawPayload := headerBuf[:n]
+
+	// JALUR 1: Jika traffic adalah SSL/TLS murni (Stunnel)
+	if rawPayload[0] == TLS_HANDSHAKE_BYTE {
 		targetConn, err := net.Dial("tcp", sslTargetHost+":"+sslTargetPort)
 		if err != nil {
 			return
@@ -95,42 +99,46 @@ func handleClient(clientConn net.Conn) {
 		defer targetConn.Close()
 		tuneSocket(targetConn)
 
-		targetConn.Write(firstByte)
+		targetConn.Write(rawPayload)
 		go io.Copy(targetConn, clientConn)
 		io.Copy(clientConn, targetConn)
 		return
 	}
 
-	headerBuf := make([]byte, 8192)
-	if n > 0 {
-		headerBuf[0] = firstByte[0]
-	}
-	hn, err := clientConn.Read(headerBuf[n:])
-	if err != nil {
-		return
-	}
-	totalHeader := headerBuf[:n+hn]
-
+	// JALUR 2: Jabat Tangan WebSocket (Sistem Ekstraksi Kebal Multi-Payload)
+	rawText := string(rawPayload)
 	wsKey := ""
-	lines := strings.Split(string(totalHeader), "\r\n")
+	
+	// Ganti total ke logika Contains mirip Python biar gak sensitif spasi/posisi huruf
+	lines := strings.Split(rawText, "\r\n")
 	for _, line := range lines {
-		if strings.HasPrefix(strings.ToLower(line), "sec-websocket-key:") {
+		if strings.Contains(strings.ToLower(line), "sec-websocket-key") {
 			parts := strings.SplitN(line, ":", 2)
 			if len(parts) == 2 {
 				wsKey = strings.TrimSpace(parts[1])
+				break
 			}
 		}
 	}
+
+	// Jika bener-bener gak ketemu akibat diacak CDN, ambil fallback key aman
 	if wsKey == "" {
-		wsKey = base64.StdEncoding.EncodeToString([]byte(time.Now().String()))
+		wsKey = base64.StdEncoding.EncodeToString([]byte(time.Now().String() + "turbo-salt"))
 	}
 
+	// Respon balik HTTP 101 murni dengan formasi standar \r\n rapi
 	h := sha1.New()
 	h.Write([]byte(wsKey + WS_MAGIC))
 	acceptKey := base64.StdEncoding.EncodeToString(h.Sum(nil))
-	response := fmt.Sprintf("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", acceptKey)
+	
+	response := "HTTP/1.1 101 Switching Protocols\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Accept: " + acceptKey + "\r\n\r\n"
+	
 	clientConn.Write([]byte(response))
 
+	// Hubungkan ke Dropbear internal port 22
 	sshConn, err := net.Dial("tcp", sshTargetHost+":"+sshTargetPort)
 	if err != nil {
 		return
@@ -138,6 +146,7 @@ func handleClient(clientConn net.Conn) {
 	defer sshConn.Close()
 	tuneSocket(sshConn)
 
+	// Pipa 1: HP -> SSH Server (Penyaring Payload Sampah Trik)
 	go func() {
 		firstPacket := true
 		buf := make([]byte, 65536)
@@ -159,6 +168,7 @@ func handleClient(clientConn net.Conn) {
 		}
 	}()
 
+	// Pipa 2: SSH Server -> HP (Injeksi Heartbeat Perangko \x89\x00)
 	bufDown := make([]byte, 65536)
 	for {
 		sshConn.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -171,7 +181,7 @@ func handleClient(clientConn net.Conn) {
 		if err != nil {
 			return
 		}
-		clientConn.SetReadDeadline(time.Time{})
+		sshConn.SetReadDeadline(time.Time{})
 		_, err = clientConn.Write(bufDown[:rn])
 		if err != nil {
 			return
