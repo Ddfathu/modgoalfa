@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -84,7 +83,7 @@ func handleClient(clientConn net.Conn) {
 	defer clientConn.Close()
 
 	// Intip byte pertama (Anti-Stuck Timeout 500ms)
-	clientConn.SetReadDeadline(time.Now().add(500 * time.Millisecond))
+	clientConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	firstByte := make([]byte, 1)
 	n, err := clientConn.Read(firstByte)
 	clientConn.SetReadDeadline(time.Time{}) // Reset timeout
