@@ -14,17 +14,13 @@ import (
 	"time"
 )
 
-const (
-	WS_MAGIC           = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-	TLS_HANDSHAKE_BYTE = 0x16
-)
+const WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 var (
-	listenPort    = getEnv("PORT", "8080") // Mengikuti port default utama lu
-	sslTargetHost = getEnv("SSL_TARGET_HOST", "127.0.0.1")
-	sslTargetPort = getEnv("SSL_TARGET_PORT", "2443")
-	sshTargetHost = getEnv("WS_TARGET_HOST", "127.0.0.1")
-	sshTargetPort = getEnv("WS_TARGET_PORT", "22")
+	// Alpine-friendly port binding (menggunakan port internal proxy)
+	listenPort = getEnv("WS_PORT", "8880")
+	targetHost = getEnv("WS_TARGET_HOST", "127.0.0.1")
+	targetPort = getEnv("WS_TARGET_PORT", "22")
 )
 
 func getEnv(key, fallback string) string {
@@ -44,12 +40,9 @@ func tuneSocket(conn net.Conn) {
 		return
 	}
 	rawConn.Control(func(fd uintptr) {
-		// TURBO MODE: Matikan delay Nagle
 		syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_NODELAY, 1)
-		// MONSTER BUFFER: Set RCV & SND Buffer ke 512KB
 		syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, 524288)
 		syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUF, 524288)
-		// SIGNAL ARMOR: Keepalive Badak 2.5 Menit
 		syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_KEEPALIVE, 1)
 		syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_KEEPIDLE, 30)
 		syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_KEEPINTVL, 10)
@@ -58,13 +51,12 @@ func tuneSocket(conn net.Conn) {
 }
 
 func main() {
-	log.Println("================================================================")
-	log.Printf("GOLANG TURBO TUNNEL ENGINE ACTIVE ON PORT %s\n", listenPort)
-	log.Println("================================================================")
-
-	listener, err := net.Listen("tcp", "0.0.0.0:"+listenPort)
+	log.Printf("[go-ws] Memulai Turbo WS Proxy pada port %s -> SSH %s\n", listenPort, targetPort)
+	
+	// Binding tanpa menentukan IP "0.0.0.0" agar dual-stack IPv4/IPv6 Alpine aktif otomatis
+	listener, err := net.Listen("tcp", ":"+listenPort)
 	if err != nil {
-		log.Fatalf("Gagal menjalankan listener: %v", err)
+		log.Fatalf("[go-ws] Gagal binding port: %v", err)
 	}
 	defer listener.Close()
 
@@ -74,15 +66,15 @@ func main() {
 			continue
 		}
 		tuneSocket(clientConn)
-		go handleClient(clientConn)
+		go handleWebSocket(clientConn)
 	}
 }
 
-func handleClient(clientConn net.Conn) {
+func handleWebSocket(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	// Ambil data awal dengan batas waktu agar tidak hang
-	clientConn.SetReadDeadline(time.Now().Add(1000 * time.Millisecond))
+	// Baca jabat tangan HTTP/WS Custom
+	clientConn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	headerBuf := make([]byte, 16384)
 	n, err := clientConn.Read(headerBuf)
 	clientConn.SetReadDeadline(time.Time{})
@@ -91,28 +83,8 @@ func handleClient(clientConn net.Conn) {
 		return
 	}
 
-	rawPayload := headerBuf[:n]
-
-	// JALUR 1: Deteksi SSL/TLS Murni mogoalfa
-	if rawPayload[0] == TLS_HANDSHAKE_BYTE {
-		targetConn, err := net.Dial("tcp", sslTargetHost+":"+sslTargetPort)
-		if err != nil {
-			return
-		}
-		defer targetConn.Close()
-		tuneSocket(targetConn)
-
-		targetConn.Write(rawPayload)
-		go io.Copy(targetConn, clientConn)
-		io.Copy(clientConn, targetConn)
-		return
-	}
-
-	// JALUR 2: WEBSOCKET HANDSHAKE (Dibuat se-fleksibel Python)
-	rawText := string(rawPayload)
+	rawText := string(headerBuf[:n])
 	wsKey := ""
-	
-	// Cari Sec-WebSocket-Key secara sensitif (Persis logika split Python)
 	for _, line := range strings.Split(rawText, "\r\n") {
 		if strings.Contains(strings.ToLower(line), "sec-websocket-key") {
 			parts := strings.SplitN(line, ":", 2)
@@ -123,32 +95,27 @@ func handleClient(clientConn net.Conn) {
 		}
 	}
 
-	// Fallback Key jika DarkTunnel/Cloudflare memanipulasi header secara ekstrem
 	if wsKey == "" {
-		wsKey = base64.StdEncoding.EncodeToString([]byte(time.Now().String() + "premium-salt"))
+		wsKey = base64.StdEncoding.EncodeToString([]byte(time.Now().String()))
 	}
 
-	// Racik respon Balikan 101 murni \r\n standar industri
 	h := sha1.New()
 	h.Write([]byte(wsKey + WS_MAGIC))
 	acceptKey := base64.StdEncoding.EncodeToString(h.Sum(nil))
-	
-	response := "HTTP/1.1 101 Switching Protocols\r\n" +
-		"Upgrade: websocket\r\n" +
-		"Connection: Upgrade\r\n" +
-		"Sec-WebSocket-Accept: " + acceptKey + "\r\n\r\n"
-	
+
+	// Respon standard HTTP murni tanpa masking biner palsu
+	response := fmt.Sprintf("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", acceptKey)
 	clientConn.Write([]byte(response))
 
-	// Hubungkan langsung ke Dropbear internal
-	sshConn, err := net.Dial("tcp", sshTargetHost+":"+sshTargetPort)
+	// Dial ke Dropbear internal port 22
+	sshConn, err := net.Dial("tcp", targetHost+":"+targetPort)
 	if err != nil {
 		return
 	}
 	defer sshConn.Close()
 	tuneSocket(sshConn)
 
-	// Pipa 1: HP -> SSH Server (FITUR PENYARING SAMPAH PAYLOAD ENHANCED)
+	// Pipa 1: HP -> SSH Server (Enhanced Payload Matcher)
 	go func() {
 		firstPacket := true
 		buf := make([]byte, 65536)
@@ -170,14 +137,13 @@ func handleClient(clientConn net.Conn) {
 		}
 	}()
 
-	// Pipa 2: SSH Server -> HP (INJEKSI ULTRA PERANGKO HEARTBEAT PER 5 DETIK)
+	// Pipa 2: SSH Server -> HP (Injeksi Heartbeat \x89\x00 Perangko)
 	bufDown := make([]byte, 65536)
 	for {
 		sshConn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		rn, err := sshConn.Read(bufDown)
 
 		if err, ok := err.(net.Error); ok && err.Timeout() {
-			// Jika kosong, tembak frame ping WebSocket biner murni biar gak lepas
 			clientConn.Write([]byte{0x89, 0x00})
 			continue
 		}
